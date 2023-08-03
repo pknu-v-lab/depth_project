@@ -136,6 +136,7 @@ class MonoDataset(data.Dataset):
             3       images resized to (self.width // 8, self.height // 8)
         """
         inputs = {}
+        b_inputs = {}
 
         do_color_aug = self.is_train and random.random() > 0.5
         do_flip = self.is_train and random.random() > 0.5
@@ -145,8 +146,12 @@ class MonoDataset(data.Dataset):
 
         if len(line) == 3:
             frame_index = int(line[1])
-        else:
+
+                
+            
+        else: 
             frame_index = 0
+        
 
         if len(line) == 3:
             side = line[2]
@@ -157,8 +162,10 @@ class MonoDataset(data.Dataset):
             if i == "s":
                 other_side = {"r": "l", "l": "r"}[side]
                 inputs[("color", i, -1)] = self.get_color(folder, frame_index, other_side, do_flip)
+                b_inputs[("color", i, -1)] = self.get_color(folder, frame_index, 'b' + other_side, do_flip)
             else:
                 inputs[("color", i, -1)] = self.get_color(folder, frame_index + i, side, do_flip)
+                b_inputs[("color", i, -1)] = self.get_color(folder, frame_index + i, 'b' + side , do_flip)
 
         # adjusting intrinsics to match each scale in the pyramid
         for scale in range(self.num_scales):
@@ -171,6 +178,11 @@ class MonoDataset(data.Dataset):
 
             inputs[("K", scale)] = torch.from_numpy(K)
             inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
+            
+            b_inputs[("K", scale)] = torch.from_numpy(K)
+            b_inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
+            
+            
 
         if do_color_aug:
             color_aug = transforms.ColorJitter(
@@ -179,15 +191,28 @@ class MonoDataset(data.Dataset):
             color_aug = (lambda x: x)
 
         self.preprocess(inputs, color_aug)
+        self.preprocess(b_inputs, color_aug)
 
         for i in self.frame_idxs:
             del inputs[("color", i, -1)]
             del inputs[("color_aug", i, -1)]
+            
+            del b_inputs[("color", i, -1)]
+            del b_inputs[("color_aug", i, -1)]
+            
+            
 
         if self.load_depth:
             depth_gt = self.get_depth(folder, frame_index, side, do_flip)
             inputs["depth_gt"] = np.expand_dims(depth_gt, 0)
             inputs["depth_gt"] = torch.from_numpy(inputs["depth_gt"].astype(np.float32))
+            
+            # 교수님한테 질문하기
+            b_depth_gt = self.get_depth(folder, frame_index, 'b'+ side, do_flip)
+            b_inputs["depth_gt"] = np.expand_dims(b_depth_gt, 0)
+            b_inputs["depth_gt"] = torch.from_numpy(b_inputs["depth_gt"].astype(np.float32))
+            
+            
 
         if "s" in self.frame_idxs:
             stereo_T = np.eye(4, dtype=np.float32)
@@ -196,8 +221,9 @@ class MonoDataset(data.Dataset):
             stereo_T[0, 3] = side_sign * baseline_sign * 0.1
 
             inputs["stereo_T"] = torch.from_numpy(stereo_T)
+            b_inputs["stereo_T"] = torch.from_numpy(stereo_T)
 
-        return inputs
+        return inputs, b_inputs
 
     def get_color(self, folder, frame_index, side, do_flip):
         raise NotImplementedError

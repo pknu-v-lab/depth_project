@@ -23,7 +23,6 @@ from layers import *
 
 import datasets
 import networks
-from dpt_networks.dpt_depth import DPTDepthModel, DPTDepthModel2
 from IPython import embed
 
 
@@ -61,16 +60,6 @@ class Trainer:
             self.models["encoder"].num_ch_enc, self.opt.scales)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
-        
-        # Download pretrained weights from DPT (https://github.com/isl-org/DPT) and put them under './weights/'  
-        self.mono_model = DPTDepthModel(
-            #path='./weights/dpt_hybrid-midas-501f0c75.pt',
-            path='./weights/dpt_hybrid_nyu-2ce69ec7.pt',
-            #path='./weights/dpt_large-midas-2f21e586.pt',
-            backbone="vitb_rn50_384", #DPT-hybrid
-            #backbone="vitl16_384", # DPT-Large
-            non_negative=True,
-        )
 
         if self.use_pose_net:
             if self.opt.pose_model_type == "separate_resnet":
@@ -259,9 +248,6 @@ class Trainer:
             features = self.models["encoder"](inputs["color_aug", 0, 0])
             outputs = self.models["depth"](features)
 
-        outputs["fromMono"], feature_dpt = self.mono_model((inputs[("color_aug", 0, 0)]-0.5)/0.5 ) 
-        outputs["fromMono_dep"] = (1/(outputs["fromMono"]+1e-6)) ##The output range of fromMono is large 250-2500
-        
         if self.opt.predictive_mask:
             outputs["predictive_mask"] = self.models["predictive_mask"](features)
 
