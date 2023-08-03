@@ -199,7 +199,10 @@ class Trainer:
         self.set_train()
 
         for batch_idx, inputs in enumerate(self.train_loader):
-
+            
+            b_inputs = inputs[1]
+            inputs = inputs[0]
+            
             before_op_time = time.time()
 
             outputs, losses = self.process_batch(inputs)

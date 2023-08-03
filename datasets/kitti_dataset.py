@@ -75,6 +75,8 @@ class KITTIRAWDataset(KITTIDataset):
             folder,
             "velodyne_points/data/{:010d}.bin".format(int(frame_index)))
 
+        if 'b' in side :
+            side = side.replace('b', '')
         depth_gt = generate_depth_map(calib_path, velo_filename, self.side_map[side])
         depth_gt = skimage.transform.resize(
             depth_gt, self.full_res_shape[::-1], order=0, preserve_range=True, mode='constant')
