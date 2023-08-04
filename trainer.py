@@ -157,7 +157,7 @@ class Trainer:
                          "kitti_odom": datasets.KITTIOdomDataset}
         self.dataset = datasets_dict[self.opt.dataset]
 
-        fpath = os.path.join(os.path.dirname(__file__), "splits", self.opt.split, "{}_files.txt")
+        fpath = os.path.join("C:\\Users\\user\\monodepth2\\monodepth2", "splits", self.opt.split, "{}_files.txt")
 
         train_filenames = readlines(fpath.format("train"))
         val_filenames = readlines(fpath.format("val"))
@@ -181,6 +181,7 @@ class Trainer:
         self.val_iter = iter(self.val_loader)
 
         self.writers = {}
+
         for mode in ["train", "val"]:
             self.writers[mode] = SummaryWriter(os.path.join(self.log_path, mode))
 
@@ -246,11 +247,11 @@ class Trainer:
             i_type = ['sharp', 'blur']
             
             b_inputs = inputs[1]
-            inputs = inputs[0]
+            sharp_inputs = inputs[0]
             
             before_op_time = time.time()
            #### Sharp(teacher) Model 학습 ####
-            outputs, losses = self.process_batch(inputs[0], i_type[0]) 
+            outputs, losses = self.process_batch(sharp_inputs, i_type[0]) 
 
             self.model_optimizer.zero_grad()
             losses["loss"].backward()
@@ -258,8 +259,8 @@ class Trainer:
            ##################################
            
            #### Blur(student) Model 학습 #### 
-            blur_outputs, blur_losses = self.process_batch(inputs[1], i_type[1])
-            blur_losses = self.process_batch_blur(self, outputs, blur_outputs, blur_losses)
+            blur_outputs, blur_losses = self.process_batch(b_inputs, i_type[1])
+            blur_losses = self.process_batch_blur(outputs, blur_outputs, blur_losses)
             self.blur_model_optimizer.zero_grad()
             blur_losses["loss"].backward()
             self.blur_model_optimizer.step()
@@ -285,10 +286,10 @@ class Trainer:
 
     def process_batch_blur(self, outputs, blur_outputs, losses):
         
-        for key, item in outputs.items():
-            outputs[key].detach()
-        regression_loss = self.regress_loss(outputs,blur_outputs)
-        losses["loss"] += regression_loss
+        # for key, item in outputs.items():
+            # outputs[key].detach()
+        # regression_loss = self.regress_loss(outputs,blur_outputs)
+        # losses["loss"] += regression_loss
         
         return losses 
     
@@ -427,21 +428,32 @@ class Trainer:
     def val(self):
         """Validate the model on a single minibatch
         """
+        i_type = ['sharp', 'blur']
         self.set_eval()
         try:
-            inputs = self.val_iter.next()
+            inputs, b_inputs = self.val_iter.next()
         except StopIteration:
             self.val_iter = iter(self.val_loader)
-            inputs = self.val_iter.next()
+            inputs, b_inputs = self.val_iter.next()
 
         with torch.no_grad():
-            outputs, losses = self.process_batch(inputs)
+            outputs, losses = self.process_batch(inputs,i_type[0])
 
             if "depth_gt" in inputs:
                 self.compute_depth_losses(inputs, outputs, losses)
 
             self.log("val", inputs, outputs, losses)
-            del inputs, outputs, losses
+            
+        
+        with torch.no_grad():
+            blur_outputs, blur_losses = self.process_batch(b_inputs, i_type[1])
+            blur_losses = self.process_batch_blur(self, outputs, blur_losses, blur_losses)
+
+            if "depth_gt" in inputs:
+                self.compute_depth_losses(b_inputs, blur_outputs, blur_losses)
+
+            self.log("val", b_inputs, blur_outputs, blur_losses)
+            del inputs, outputs, losses, b_inputs, blur_outputs, blur_losses
 
         self.set_train()
 
@@ -496,6 +508,12 @@ class Trainer:
                 if not self.opt.disable_automasking:
                     outputs[("color_identity", frame_id, scale)] = \
                         inputs[("color", frame_id, source_scale)]
+                        
+    # def regress_loss(self, outputs_t, outputs):
+    #     losses ={}
+    #     abs_diff = torch.abs(outputs[("disp",0)] - outputs_t[("disp",0)])
+    #     uncerted_l1_loss = ( abs_diff / outputs[("uncert",0)] + torch.log(outputs[("uncert",0)])).mean()
+    #     return uncerted_l1_loss
 
     def compute_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
