@@ -54,11 +54,22 @@ class DepthDecoder(nn.Module):
         x = input_features[-1]
         for i in range(4, -1, -1):
             x = self.convs[("upconv", i, 0)](x)
+            
             x = [upsample(x)]
             if self.use_skips and i > 0:
                 x += [input_features[i - 1]]
             x = torch.cat(x, 1)
+            ###########feature share##########
+            self.outputs[("upconv", i, 0)] = x
+            ##################################
+            
+            
             x = self.convs[("upconv", i, 1)](x)
+            
+            
+            ########### feature share #########
+            self.outputs[("upconv", i, 1)] = x
+            
             if i in self.scales:
                 self.outputs[("disp", i)] = self.sigmoid(self.convs[("dispconv", i)](x))
 
