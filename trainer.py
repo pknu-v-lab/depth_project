@@ -306,7 +306,7 @@ class Trainer:
 
         self.generate_images_pred(b_inputs, b_outputs)
         losses = self.compute_losses(b_inputs, b_outputs)
-        if type(inputs) == list(inputs):
+        if type(inputs) == list:
             losses = self.process_batch_blur(s_inputs, b_outputs, losses)
 
         return b_outputs, losses
