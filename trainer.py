@@ -54,42 +54,30 @@ class Trainer:
         
         ###################### sharp network ######################
         
-        self.models["sharp_encoder"] = networks.ResnetEncoder(
+        self.models["encoder"] = networks.ResnetEncoder(
             self.opt.num_layers, self.opt.weights_init == "pretrained")
         
-        self.models["sharp_depth"] = networks.DepthDecoder(
-            self.models["sharp_encoder"].num_ch_enc, self.opt.scales)
+        self.models["depth"] = networks.DepthDecoder(
+            self.models["encoder"].num_ch_enc, self.opt.scales)
         
         encoder_path = os.path.join(self.opt.sharp_weights_folder, "encoder.pth")
         decoder_path = os.path.join(self.opt.sharp_weights_folder, "depth.pth")
         
         encoder_dict = torch.load(encoder_path) if torch.cuda.is_available() else torch.load(encoder_path, map_location = 'cpu')
         decoder_dict = torch.load(decoder_path) if torch.cuda.is_available() else torch.load(encoder_path, map_location = 'cpu')
-        model_dict = self.models["sharp_encoder"].state_dict()
-        dec_model_dict = self.models["sharp_depth"].state_dict()
+        model_dict = self.models["encoder"].state_dict()
+        dec_model_dict = self.models["depth"].state_dict()
         
         
-        self.models["sharp_encoder"].load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
-        self.models["sharp_depth"].load_state_dict({k: v for k, v in decoder_dict.items() if k in dec_model_dict})
-        
-        
-        # blur network 선언
-        self.models["blur_encoder"] = networks.ResnetEncoder(
-            self.opt.num_layers, self.opt.weights_init == "pretrained")
-        
-        # sharp decoder 파라미터 공유
-        self.models["blur_depth"] = networks.DepthDecoder(
-            self.models["blur_encoder"].num_ch_enc, self.opt.scales)
+        self.models["encoder"].load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
+        self.models["depth"].load_state_dict({k: v for k, v in decoder_dict.items() if k in dec_model_dict})
         
         
         
-        
-        self.models["blur_encoder"].to(self.device)
-        self.models["sharp_encoder"].to(self.device)
-        self.parameters_to_train += list(self.models["blur_encoder"].parameters())
-        self.models["blur_depth"].to(self.device)
-        self.models["sharp_depth"].to(self.device)
-        self.parameters_to_train += list(self.models["blur_depth"].parameters())
+        self.models["encoder"].to(self.device)
+        self.parameters_to_train += list(self.models["encoder"].parameters())
+        self.models["depth"].to(self.device)
+        self.parameters_to_train += list(self.models["depth"].parameters())
 
         if self.use_pose_net:
              
@@ -118,18 +106,18 @@ class Trainer:
 
             # Our implementation of the predictive masking baseline has the the same architecture
             # as our depth decoder. We predict a separate mask for each source frame.
-            self.models["blur_predictive_mask"] = networks.DepthDecoder(
-                self.models["blur_encoder"].num_ch_enc, self.opt.scales,
+            self.models["predictive_mask"] = networks.DepthDecoder(
+                self.models["encoder"].num_ch_enc, self.opt.scales,
                 num_output_channels=(len(self.opt.frame_ids) - 1))
-            self.models["blur_predictive_mask"].to(self.device)
-            self.parameters_to_train += list(self.models["blur_predictive_mask"].parameters())
+            self.models["predictive_mask"].to(self.device)
+            self.parameters_to_train += list(self.models["predictive_mask"].parameters())
             
 
-        self.blur_model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
+        self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
         
         
-        self.blur_model_lr_scheduler = optim.lr_scheduler.StepLR(
-            self.blur_model_optimizer, self.opt.scheduler_step_size, 0.1)
+        self.model_lr_scheduler = optim.lr_scheduler.StepLR(
+            self.model_optimizer, self.opt.scheduler_step_size, 0.1)
 
         if self.opt.load_weights_folder is not None:
             self.load_model()
@@ -224,7 +212,7 @@ class Trainer:
         """Run a single epoch of training and validation
         """
         
-        self.blur_model_lr_scheduler.step()
+        self.model_lr_scheduler.step()
 
         print("Training")
         self.set_train()
@@ -236,10 +224,10 @@ class Trainer:
     
            
            #### Blur(student) Model 학습 #### 
-            blur_outputs, blur_losses = self.process_batch(inputs)
-            self.blur_model_optimizer.zero_grad()
-            blur_losses["loss"].backward()
-            self.blur_model_optimizer.step()
+            outputs, losses = self.process_batch(inputs)
+            self.model_optimizer.zero_grad()
+            losses["loss"].backward()
+            self.model_optimizer.step()
             
            ##################################
 
@@ -250,27 +238,19 @@ class Trainer:
             late_phase = self.step % 2000 == 0
 
             if early_phase or late_phase:
-                self.log_time(batch_idx, duration, blur_losses["loss"].cpu().data)
+                self.log_time(batch_idx, duration, losses["loss"].cpu().data)
 
                 if "depth_gt" in inputs[0]:
-                    self.compute_depth_losses(inputs[0], blur_outputs, blur_losses)
+                    self.compute_depth_losses(inputs[0], outputs, losses)
 
-                self.log("train", inputs[0], blur_outputs, blur_losses)
+                self.log("train", inputs[0], outputs, losses)
                 self.val()
 
             self.step += 1
 
-    def process_batch_blur(self, s_inputs, b_outputs, losses):
+    def process_batch_blur(self, temp, b_outputs, losses):
         
-        for key, ipt in s_inputs.items():
-            s_inputs[key] = ipt.to(self.device)
-        
-        s_outputs = self.models["sharp_depth"](self.models["sharp_encoder"](s_inputs["color_aug", 0 , 0]))
-        
-        for key, item in s_outputs.items():
-            s_outputs[key].detach()
-        
-        regression_loss = self.regress_loss(s_outputs,b_outputs)
+        regression_loss = self.regress_loss(temp, b_outputs)
         losses["loss"] += regression_loss
         
         return losses 
@@ -287,12 +267,16 @@ class Trainer:
         
         for key, ipt in b_inputs.items():
                 b_inputs[key] = ipt.to(self.device)
-
+        
+        if type(inputs) == list:
+            for key, ipt in s_inputs.items():
+                s_inputs[key] = ipt.to(self.device)      
         
         # Otherwise, we only feed the image with frame_id 0 through the depth encoder
       
-        b_features = self.models["blur_encoder"](b_inputs["color_aug", 0, 0])
-        b_outputs = self.models["blur_depth"](b_features)
+        b_features = self.models["encoder"](b_inputs["color_aug", 0, 0])
+        b_outputs = self.models["depth"](b_features)
+        
         
         
 
@@ -306,8 +290,29 @@ class Trainer:
 
         self.generate_images_pred(b_inputs, b_outputs)
         losses = self.compute_losses(b_inputs, b_outputs)
+        
         if type(inputs) == list:
-            losses = self.process_batch_blur(s_inputs, b_outputs, losses)
+            s_features = self.models["encoder"](s_inputs["color_aug", 0, 0])
+            s_outputs = self.models["depth"](s_features)
+            
+            if self.opt.predictive_mask:
+                s_outputs["predictive_mask"] = self.models["predictive_mask"](s_features)
+            
+            s_outputs.update(self.predict_poses(s_inputs, s_features))
+            
+            self.generate_images_pred(s_inputs, s_outputs)
+            s_losses = self.compute_losses(s_inputs, s_outputs)
+            
+            for key, value in s_losses.items():
+                losses[key] += value
+            
+            
+            temp = {}
+            for key, item in s_outputs.items():
+                temp[key] = s_outputs[key].detach()
+        
+            losses = self.process_batch_blur(temp, b_outputs, losses)
+            
 
         return b_outputs, losses
 
@@ -451,16 +456,16 @@ class Trainer:
     # feature distillation                    
     def feature_loss(self, s_outputs, b_outputs):
         l1_loss = 0
-        for i in range(4, -1, 1):
-            abs_diff = torch.abs(s_outputs[("upconv", i, 0)]  - b_outputs[("upconv", i, 0)])
-            abs_diff += torch.abs(s_outputs[("upconv", i, 1)]  - b_outputs[("upconv", i, 1)])
-            l1_loss += abs_diff.mean(1, True)
+        for i in range(4, -1, -1):
+            abs_diff = torch.abs(s_outputs[("upconv", i, 0)]  - b_outputs[("upconv", i, 0)]).mean(1, True)
+            abs_diff += torch.abs(s_outputs[("upconv", i, 1)]  - b_outputs[("upconv", i, 1)]).mean(1, True)
+            l1_loss += abs_diff.mean()
         
         return l1_loss
     
     def regress_loss(self, s_outputs, b_outputs):
         
-        feature_loss = self.feature_loss(s_outputs, b_outputs) 
+        feature_loss = self.feature_loss(s_outputs, b_outputs) * self.opt.feature_loss_coefficient
         
         rmse = (s_outputs["disp", 0] - b_outputs["disp", 0]) ** 2
         rmse_loss = torch.sqrt(rmse.mean())
@@ -677,8 +682,8 @@ class Trainer:
             torch.save(to_save, save_path)
         
         #blur model 파라미터 저장
-        save_path_blur = os.path.join(save_folder, "{}.pth".format("adam_blur"))
-        torch.save(self.blur_model_optimizer.state_dict(), save_path_blur)
+        save_path = os.path.join(save_folder, "{}.pth".format("adam"))
+        torch.save(self.model_optimizer.state_dict(), save_path)
         
 
     def load_model(self):
@@ -705,14 +710,8 @@ class Trainer:
             print("Loading Adam weights")
             optimizer_dict = torch.load(optimizer_load_path)
             self.model_optimizer.load_state_dict(optimizer_dict)
-            self.blur_model_optimizer.load_state_dict()
+            self.model_optimizer.load_state_dict()
         else:
             print("Cannot find Adam weights so Adam is randomly initialized")
             
-        optimizer_load_path_blur = os.path.join(self.opt.load_weights_folder, "adam_blur.pth")
-        if os.path.isfile(optimizer_load_path_blur):
-            print("Loading Blur Model Adam weights")
-            optimizer_dict_blur = torch.load(optimizer_load_path_blur)
-            self.blur_model_optimizer.load_state_dict(optimizer_dict_blur)
-        else:
-            print("Cannot find Blur Model Adam weights so Adam is randomly initialized")
+        
