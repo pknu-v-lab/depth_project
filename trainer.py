@@ -60,18 +60,7 @@ class Trainer:
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales)
         
-        encoder_path = os.path.join(self.opt.sharp_weights_folder, "encoder.pth")
-        decoder_path = os.path.join(self.opt.sharp_weights_folder, "depth.pth")
-        
-        encoder_dict = torch.load(encoder_path) if torch.cuda.is_available() else torch.load(encoder_path, map_location = 'cpu')
-        decoder_dict = torch.load(decoder_path) if torch.cuda.is_available() else torch.load(encoder_path, map_location = 'cpu')
-        model_dict = self.models["encoder"].state_dict()
-        dec_model_dict = self.models["depth"].state_dict()
-        
-        
-        self.models["encoder"].load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
-        self.models["depth"].load_state_dict({k: v for k, v in decoder_dict.items() if k in dec_model_dict})
-        
+    
         
         
         self.models["encoder"].to(self.device)
@@ -268,9 +257,8 @@ class Trainer:
         for key, ipt in b_inputs.items():
                 b_inputs[key] = ipt.to(self.device)
         
-        if type(inputs) == list:
-            for key, ipt in s_inputs.items():
-                s_inputs[key] = ipt.to(self.device)      
+      
+               
         
         # Otherwise, we only feed the image with frame_id 0 through the depth encoder
       
@@ -292,6 +280,8 @@ class Trainer:
         losses = self.compute_losses(b_inputs, b_outputs)
         
         if type(inputs) == list:
+            for key, ipt in s_inputs.items():
+                s_inputs[key] = ipt.to(self.device)   
             s_features = self.models["encoder"](s_inputs["color_aug", 0, 0])
             s_outputs = self.models["depth"](s_features)
             
@@ -461,11 +451,13 @@ class Trainer:
             abs_diff += torch.abs(s_outputs[("upconv", i, 1)]  - b_outputs[("upconv", i, 1)]).mean(1, True)
             l1_loss += abs_diff.mean()
         
+        
         return l1_loss
     
     def regress_loss(self, s_outputs, b_outputs):
         
         feature_loss = self.feature_loss(s_outputs, b_outputs) * self.opt.feature_loss_coefficient
+        
         
         rmse = (s_outputs["disp", 0] - b_outputs["disp", 0]) ** 2
         rmse_loss = torch.sqrt(rmse.mean())

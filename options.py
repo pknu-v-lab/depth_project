@@ -84,7 +84,7 @@ class MonodepthOptions:
                                  default=[0, -1, 1])
         self.parser.add_argument('--feature_loss_coefficient', 
                                  type=float,
-                                 default=0.03) 
+                                 default=0.00001) 
         
 
         # OPTIMIZATION options
@@ -95,7 +95,7 @@ class MonodepthOptions:
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",
-                                 default=1e-4)
+                                 default=1e-5)
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
