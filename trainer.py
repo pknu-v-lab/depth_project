@@ -37,6 +37,7 @@ class Trainer:
 
         self.models = {}
         self.parameters_to_train = []
+        self.parameters_blur_train = []
 
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
 
@@ -51,12 +52,30 @@ class Trainer:
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s")
 
+<<<<<<< HEAD
         
         ###################### sharp network ######################
         
         self.models["encoder"] = networks.ResnetEncoder(
             self.opt.num_layers, self.opt.weights_init == "pretrained")
         
+=======
+        # blur network 선언
+        self.models["blur_encoder"] = networks.ResnetEncoder(
+            self.opt.num_layers, self.opt.weights_init == "pretrained")
+        self.models["blur_encoder"].to(self.device)
+        self.parameters_blur_train += list(self.models["blur_encoder"].parameters())
+        self.models["blur_depth"] = networks.DepthDecoder(
+            self.models["blur_encoder"].num_ch_enc, self.opt.scales)
+        self.models["blur_depth"].to(self.device)
+        self.parameters_blur_train += list(self.models["blur_depth"].parameters())
+        
+        # shar network 선언
+        self.models["encoder"] = networks.ResnetEncoder(
+            self.opt.num_layers, self.opt.weights_init == "pretrained")
+        self.models["encoder"].to(self.device)
+        self.parameters_to_train += list(self.models["encoder"].parameters())
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales)
         
@@ -69,6 +88,7 @@ class Trainer:
         self.parameters_to_train += list(self.models["depth"].parameters())
 
         if self.use_pose_net:
+<<<<<<< HEAD
              
             self.models["pose_encoder"] = networks.ResnetEncoder(
                 self.opt.num_layers,
@@ -83,9 +103,56 @@ class Trainer:
                 self.models["pose_encoder"].num_ch_enc,
                 num_input_features=1,
                 num_frames_to_predict_for=2)
+=======
+            if self.opt.pose_model_type == "separate_resnet":
+                self.models["pose_encoder"] = networks.ResnetEncoder(
+                    self.opt.num_layers,
+                    self.opt.weights_init == "pretrained",
+                    num_input_images=self.num_pose_frames)
+                
+                self.models["blur_pose_encoder"] = networks.ResnetEncoder(
+                    self.opt.num_layers,
+                    self.opt.weights_init == "pretrained",
+                    num_input_images=self.num_pose_frames)
 
+                self.models["pose_encoder"].to(self.device)
+                self.parameters_to_train += list(self.models["pose_encoder"].parameters())
+                
+                self.models["blur_pose_encoder"].to(self.device)
+                self.parameters_blur_train += list(self.models["blur_pose_encoder"].parameters())
+
+                self.models["blur_pose"] = networks.PoseDecoder(
+                    self.models["blur_pose_encoder"].num_ch_enc,
+                    num_input_features=1,
+                    num_frames_to_predict_for=2)
+                
+                self.models["pose"] = networks.PoseDecoder(
+                    self.models["pose_encoder"].num_ch_enc,
+                    num_input_features=1,
+                    num_frames_to_predict_for=2)
+
+            elif self.opt.pose_model_type == "shared":
+                self.models["blur_pose"] = networks.PoseDecoder(
+                    self.models["blur_encoder"].num_ch_enc, self.num_pose_frames)
+                
+                self.models["pose"] = networks.PoseDecoder(
+                    self.models["encoder"].num_ch_enc, self.num_pose_frames)
+
+            elif self.opt.pose_model_type == "posecnn":
+                self.models["blur_pose"] = networks.PoseCNN(
+                    self.num_input_frames if self.opt.pose_model_input == "all" else 2)
+                
+                self.models["pose"] = networks.PoseCNN(
+                    self.num_input_frames if self.opt.pose_model_input == "all" else 2)
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
+
+            self.models["blur_pose"].to(self.device)
             self.models["pose"].to(self.device)
+<<<<<<< HEAD
 
+=======
+            self.parameters_blur_train += list(self.models["blur_pose"].parameters())
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
             self.parameters_to_train += list(self.models["pose"].parameters())
 
 
@@ -95,6 +162,12 @@ class Trainer:
 
             # Our implementation of the predictive masking baseline has the the same architecture
             # as our depth decoder. We predict a separate mask for each source frame.
+            self.models["blur_predictive_mask"] = networks.DepthDecoder(
+                self.models["blur_encoder"].num_ch_enc, self.opt.scales,
+                num_output_channels=(len(self.opt.frame_ids) - 1))
+            self.models["blur_predictive_mask"].to(self.device)
+            self.parameters_blur_train += list(self.models["blur_predictive_mask"].parameters())
+            
             self.models["predictive_mask"] = networks.DepthDecoder(
                 self.models["encoder"].num_ch_enc, self.opt.scales,
                 num_output_channels=(len(self.opt.frame_ids) - 1))
@@ -103,10 +176,16 @@ class Trainer:
             
 
         self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
+<<<<<<< HEAD
         
+=======
+        self.blur_model_optimizer = optim.Adam(self.parameters_blur_train, self.opt.learning_rate)
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
         
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
             self.model_optimizer, self.opt.scheduler_step_size, 0.1)
+        self.blur_model_lr_scheduler = optim.lr_scheduler.StepLR(
+            self.blur_model_optimizer, self.opt.scheduler_step_size, 0.1)
 
         if self.opt.load_weights_folder is not None:
             self.load_model()
@@ -121,7 +200,7 @@ class Trainer:
                          "kitti_odom": datasets.KITTIOdomDataset}
         self.dataset = datasets_dict[self.opt.dataset]
 
-        fpath = os.path.join(os.path.dirname(__file__), "splits", self.opt.split, "{}_files.txt")
+        fpath = os.path.join("C:\\Users\\user\\monodepth2\\monodepth2", "splits", self.opt.split, "{}_files.txt")
 
         train_filenames = readlines(fpath.format("train"))
         val_filenames = readlines(fpath.format("val"))
@@ -202,11 +281,13 @@ class Trainer:
         """
         
         self.model_lr_scheduler.step()
+        self.blur_model_lr_scheduler.step()
 
         print("Training")
         self.set_train()
 
         for batch_idx, inputs in enumerate(self.train_loader):
+<<<<<<< HEAD
         
             before_op_time = time.time()
            
@@ -214,10 +295,33 @@ class Trainer:
            
            #### Blur(student) Model 학습 #### 
             outputs, losses = self.process_batch(inputs)
+=======
+            
+            i_type = ['sharp', 'blur']
+            
+            b_inputs = inputs[1]
+            sharp_inputs = inputs[0]
+            
+            before_op_time = time.time()
+           #### Sharp(teacher) Model 학습 ####
+            outputs, losses = self.process_batch(sharp_inputs, i_type[0]) 
+
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
             self.model_optimizer.zero_grad()
             final_loss = losses["loss"] + losses["reg_loss"] if losses["reg_loss"] is not None else losses["loss"]
             final_loss.backward()
             self.model_optimizer.step()
+<<<<<<< HEAD
+=======
+           ##################################
+           
+           #### Blur(student) Model 학습 #### 
+            blur_outputs, blur_losses = self.process_batch(b_inputs, i_type[1])
+            blur_losses = self.process_batch_blur(outputs, blur_outputs, blur_losses)
+            self.blur_model_optimizer.zero_grad()
+            blur_losses["loss"].backward()
+            self.blur_model_optimizer.step()
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
             
            ##################################
 
@@ -228,6 +332,7 @@ class Trainer:
             late_phase = self.step % 2000 == 0
 
             if early_phase or late_phase:
+<<<<<<< HEAD
                 if losses["reg_loss"] is not None:
                     self.log_time(batch_idx, duration, losses["loss"].cpu().data, losses["reg_loss"].item())
                 else:
@@ -237,18 +342,35 @@ class Trainer:
                     self.compute_depth_losses(inputs[0], outputs, losses)
 
                 self.log("train", inputs[0], outputs, losses)
+=======
+                self.log_time(batch_idx, duration, blur_losses["loss"].cpu().data)
+
+                if "depth_gt" in inputs[1]:
+                    self.compute_depth_losses(inputs[1], blur_outputs, blur_losses)
+
+                self.log("train", inputs[1], blur_outputs, blur_losses)
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
                 self.val()
 
             self.step += 1
 
+<<<<<<< HEAD
     def process_batch_blur(self, temp, b_outputs, losses):
         
         regression_loss = self.regress_loss(temp, b_outputs)
         losses["reg_loss"] = regression_loss
+=======
+    def process_batch_blur(self, outputs, blur_outputs, losses):
+        
+        # for key, item in outputs.items():
+            # outputs[key].detach()
+        # regression_loss = self.regress_loss(outputs,blur_outputs)
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
         # losses["loss"] += regression_loss
         
         return losses 
     
+<<<<<<< HEAD
     def process_batch(self, inputs):
         """Pass a minibatch through the network and generate images and losses
         """
@@ -272,6 +394,62 @@ class Trainer:
                     
         b_outputs.update(self.predict_poses(b_inputs, b_features))
 
+=======
+    def process_batch(self, inputs, type):
+        """Pass a minibatch through the network and generate images and losses
+        """
+        
+        
+        for key, ipt in inputs.items():
+            inputs[key] = ipt.to(self.device)
+
+        if self.opt.pose_model_type == "shared":
+            # If we are using a shared encoder for both depth and pose (as advocated
+            # in monodepthv1), then all images are fed separately through the depth encoder.
+            
+            if type == "blur":
+                all_color_aug = torch.cat([inputs[("color_aug", i, 0)] for i in self.opt.frame_ids])
+                all_features = self.models["blur_encoder"](all_color_aug)
+                all_features = [torch.split(f, self.opt.batch_size) for f in all_features]
+
+                features = {}
+                for i, k in enumerate(self.opt.frame_ids):
+                    features[k] = [f[i] for f in all_features]
+
+                outputs = self.models["blur_depth"](features[0])
+                
+            else:
+                all_color_aug = torch.cat([inputs[("color_aug", i, 0)] for i in self.opt.frame_ids])
+                all_features = self.models["encoder"](all_color_aug)
+                all_features = [torch.split(f, self.opt.batch_size) for f in all_features]
+
+                features = {}
+                for i, k in enumerate(self.opt.frame_ids):
+                    features[k] = [f[i] for f in all_features]
+
+                outputs = self.models["depth"](features[0])
+                
+                
+        else:
+            # Otherwise, we only feed the image with frame_id 0 through the depth encoder
+            if type == "blur":
+                features = self.models["blur_encoder"](inputs["color_aug", 0, 0])
+                outputs = self.models["blur_depth"](features)
+            
+            else:  
+                features = self.models["encoder"](inputs["color_aug", 0, 0])
+                outputs = self.models["depth"](features)
+
+        if self.opt.predictive_mask:
+            if type == "blur":
+                outputs["predictive_mask"] = self.models["predictive_mask"](features)
+                
+            else:
+                outputs["blur_predictive_mask"] = self.models["blur_predictive_mask"](features)
+
+        if self.use_pose_net:
+            outputs.update(self.predict_poses(inputs, features, type))
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
 
         self.generate_images_pred(b_inputs, b_outputs)
         losses = self.compute_losses(b_inputs, b_outputs)
@@ -302,7 +480,7 @@ class Trainer:
 
         return b_outputs, losses
 
-    def predict_poses(self, inputs, features):
+    def predict_poses(self, inputs, features, type):
         """Predict poses between input frames for monocular sequences.
         """
         outputs = {}
@@ -322,11 +500,26 @@ class Trainer:
                     else:
                         pose_inputs = [pose_feats[0], pose_feats[f_i]]
 
+<<<<<<< HEAD
                     
                         
                     pose_inputs = [self.models["pose_encoder"](torch.cat(pose_inputs, 1))]
                         
                     axisangle, translation = self.models["pose"](pose_inputs)
+=======
+                    if self.opt.pose_model_type == "separate_resnet":
+                        if type == "blur":
+                            pose_inputs = [self.models["blur_pose_encoder"](torch.cat(pose_inputs, 1))]
+                        else:
+                            pose_inputs = [self.models["pose_encoder"](torch.cat(pose_inputs, 1))]
+                    elif self.opt.pose_model_type == "posecnn":
+                        pose_inputs = torch.cat(pose_inputs, 1)
+                    
+                    if type == "blur":    
+                        axisangle, translation = self.models["blur_pose"](pose_inputs)
+                    else:
+                        axisangle, translation = self.models["pose"](pose_inputs)
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
                         
                     outputs[("axisangle", 0, f_i)] = axisangle
                     outputs[("translation", 0, f_i)] = translation
@@ -342,15 +535,30 @@ class Trainer:
                     [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids if i != "s"], 1)
 
                 if self.opt.pose_model_type == "separate_resnet":
+<<<<<<< HEAD
                     
                  
                     pose_inputs = [self.models["pose_encoder"](pose_inputs)]
+=======
+                    if type == "blur":
+                        pose_inputs = [self.models["blur_pose_encoder"](pose_inputs)]
+                    else:
+                        pose_inputs = [self.models["pose_encoder"](pose_inputs)]
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
 
             elif self.opt.pose_model_type == "shared":
                 pose_inputs = [features[i] for i in self.opt.frame_ids if i != "s"]
                 
+<<<<<<< HEAD
             
             axisangle, translation = self.models["pose"](pose_inputs)
+=======
+            if type == "blur":
+                axisangle, translation = self.models["blur_pose"](pose_inputs)
+            
+            else:
+                axisangle, translation = self.models["pose"](pose_inputs)
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
 
             for i, f_i in enumerate(self.opt.frame_ids[1:]):
                 if f_i != "s":
@@ -364,6 +572,7 @@ class Trainer:
     def val(self):
         """Validate the model on a single minibatch
         """
+<<<<<<< HEAD
         
         self.set_eval()
         try:
@@ -376,14 +585,41 @@ class Trainer:
             
         with torch.no_grad():
             outputs, losses = self.process_batch(b_inputs)
+=======
+        i_type = ['sharp', 'blur']
+        self.set_eval()
+        try:
+            inputs, b_inputs = self.val_iter.next()
+        except StopIteration:
+            self.val_iter = iter(self.val_loader)
+            inputs, b_inputs = self.val_iter.next()
+
+        with torch.no_grad():
+            outputs, losses = self.process_batch(inputs,i_type[0])
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
 
             if "depth_gt" in s_inputs:
                 self.compute_depth_losses(s_inputs, outputs, losses)
 
+<<<<<<< HEAD
             self.log("val", s_inputs, outputs, losses)
             
     
             del inputs, outputs, losses, b_inputs, s_inputs
+=======
+            self.log("val", inputs, outputs, losses)
+            
+        
+        with torch.no_grad():
+            blur_outputs, blur_losses = self.process_batch(b_inputs, i_type[1])
+            blur_losses = self.process_batch_blur(self, outputs, blur_losses, blur_losses)
+
+            if "depth_gt" in inputs:
+                self.compute_depth_losses(b_inputs, blur_outputs, blur_losses)
+
+            self.log("val", b_inputs, blur_outputs, blur_losses)
+            del inputs, outputs, losses, b_inputs, blur_outputs, blur_losses
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
 
         self.set_train()
 
@@ -438,6 +674,7 @@ class Trainer:
                 if not self.opt.disable_automasking:
                     outputs[("color_identity", frame_id, scale)] = \
                         inputs[("color", frame_id, source_scale)]
+<<<<<<< HEAD
     
     # feature distillation                    
     def feature_loss(self, s_outputs, b_outputs):
@@ -455,6 +692,14 @@ class Trainer:
         loss = (feature_loss + disp_loss) * self.opt.feature_loss_coefficient
         
         return loss
+=======
+                        
+    # def regress_loss(self, outputs_t, outputs):
+    #     losses ={}
+    #     abs_diff = torch.abs(outputs[("disp",0)] - outputs_t[("disp",0)])
+    #     uncerted_l1_loss = ( abs_diff / outputs[("uncert",0)] + torch.log(outputs[("uncert",0)])).mean()
+    #     return uncerted_l1_loss
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
 
     def compute_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
@@ -675,6 +920,13 @@ class Trainer:
         save_path = os.path.join(save_folder, "{}.pth".format("adam"))
         torch.save(self.model_optimizer.state_dict(), save_path)
         
+<<<<<<< HEAD
+=======
+        #blur model 파라미터 저장
+        save_path_blur = os.path.join(save_folder, "{}.pth".format("adam_blur"))
+        torch.save(self.blur_model_optimizer.state_dict(), save_path_blur)
+        
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
 
     def load_model(self):
         """Load model(s) from disk
@@ -700,8 +952,22 @@ class Trainer:
             print("Loading Adam weights")
             optimizer_dict = torch.load(optimizer_load_path)
             self.model_optimizer.load_state_dict(optimizer_dict)
+<<<<<<< HEAD
             self.model_optimizer.load_state_dict()
         else:
             print("Cannot find Adam weights so Adam is randomly initialized")
             
         
+=======
+            self.blur_model_optimizer.load_state_dict()
+        else:
+            print("Cannot find Adam weights so Adam is randomly initialized")
+            
+        optimizer_load_path_blur = os.path.join(self.opt.load_weights_folder, "adam_blur.pth")
+        if os.path.isfile(optimizer_load_path_blur):
+            print("Loading Blur Model Adam weights")
+            optimizer_dict_blur = torch.load(optimizer_load_path_blur)
+            self.blur_model_optimizer.load_state_dict(optimizer_dict_blur)
+        else:
+            print("Cannot find Blur Model Adam weights so Adam is randomly initialized")
+>>>>>>> 89f0717980b33cf40d74f2e6d192ee8e7f485e5c
