@@ -85,7 +85,7 @@ class Trainer:
                 num_input_features=1,
                 num_frames_to_predict_for=2)
 
-            self.models["blur_pose"].to(self.device)
+        
             self.models["pose"].to(self.device)
             self.parameters_to_train += list(self.models["pose"].parameters())
 
@@ -114,8 +114,6 @@ class Trainer:
         
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
             self.model_optimizer, self.opt.scheduler_step_size, 0.1)
-        self.blur_model_lr_scheduler = optim.lr_scheduler.StepLR(
-            self.blur_model_optimizer, self.opt.scheduler_step_size, 0.1)
 
         if self.opt.load_weights_folder is not None:
             self.load_model()
@@ -130,7 +128,7 @@ class Trainer:
                          "kitti_odom": datasets.KITTIOdomDataset}
         self.dataset = datasets_dict[self.opt.dataset]
 
-        fpath = os.path.join("C:\\Users\\user\\monodepth2\\monodepth2", "splits", self.opt.split, "{}_files.txt")
+        fpath = os.path.join(os.path.dirname(__file__), "splits", self.opt.split, "{}_files.txt")
 
         train_filenames = readlines(fpath.format("train"))
         val_filenames = readlines(fpath.format("val"))
