@@ -37,7 +37,7 @@ class Trainer:
 
         self.models = {}
         self.parameters_to_train = []
-        self.parameters_blur_train = []
+        
 
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
 
@@ -96,11 +96,7 @@ class Trainer:
 
             # Our implementation of the predictive masking baseline has the the same architecture
             # as our depth decoder. We predict a separate mask for each source frame.
-            self.models["blur_predictive_mask"] = networks.DepthDecoder(
-                self.models["blur_encoder"].num_ch_enc, self.opt.scales,
-                num_output_channels=(len(self.opt.frame_ids) - 1))
-            self.models["blur_predictive_mask"].to(self.device)
-            self.parameters_blur_train += list(self.models["blur_predictive_mask"].parameters())
+            
             
             self.models["predictive_mask"] = networks.DepthDecoder(
                 self.models["encoder"].num_ch_enc, self.opt.scales,
@@ -209,7 +205,7 @@ class Trainer:
         """
         
         self.model_lr_scheduler.step()
-        self.blur_model_lr_scheduler.step()
+
 
         print("Training")
         self.set_train()
