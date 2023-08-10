@@ -51,41 +51,43 @@ class Trainer:
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s")
 
+        
+        ###################### sharp network ######################
+        
         self.models["encoder"] = networks.ResnetEncoder(
             self.opt.num_layers, self.opt.weights_init == "pretrained")
-        self.models["encoder"].to(self.device)
-        self.parameters_to_train += list(self.models["encoder"].parameters())
-
+        
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales)
+        
+    
+        
+        
+        self.models["encoder"].to(self.device)
+        self.parameters_to_train += list(self.models["encoder"].parameters())
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
 
         if self.use_pose_net:
-            if self.opt.pose_model_type == "separate_resnet":
-                self.models["pose_encoder"] = networks.ResnetEncoder(
-                    self.opt.num_layers,
-                    self.opt.weights_init == "pretrained",
-                    num_input_images=self.num_pose_frames)
+             
+            self.models["pose_encoder"] = networks.ResnetEncoder(
+                self.opt.num_layers,
+                self.opt.weights_init == "pretrained",
+                num_input_images=self.num_pose_frames)
+             
+            self.models["pose_encoder"].to(self.device)
+             
+            self.parameters_to_train += list(self.models["pose_encoder"].parameters())
 
-                self.models["pose_encoder"].to(self.device)
-                self.parameters_to_train += list(self.models["pose_encoder"].parameters())
-
-                self.models["pose"] = networks.PoseDecoder(
-                    self.models["pose_encoder"].num_ch_enc,
-                    num_input_features=1,
-                    num_frames_to_predict_for=2)
-
-            elif self.opt.pose_model_type == "shared":
-                self.models["pose"] = networks.PoseDecoder(
-                    self.models["encoder"].num_ch_enc, self.num_pose_frames)
-
-            elif self.opt.pose_model_type == "posecnn":
-                self.models["pose"] = networks.PoseCNN(
-                    self.num_input_frames if self.opt.pose_model_input == "all" else 2)
+            self.models["pose"] = networks.PoseDecoder(
+                self.models["pose_encoder"].num_ch_enc,
+                num_input_features=1,
+                num_frames_to_predict_for=2)
 
             self.models["pose"].to(self.device)
+
             self.parameters_to_train += list(self.models["pose"].parameters())
+
 
         if self.opt.predictive_mask:
             assert self.opt.disable_automasking, \
@@ -98,13 +100,17 @@ class Trainer:
                 num_output_channels=(len(self.opt.frame_ids) - 1))
             self.models["predictive_mask"].to(self.device)
             self.parameters_to_train += list(self.models["predictive_mask"].parameters())
+            
 
         self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
+        
+        
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
             self.model_optimizer, self.opt.scheduler_step_size, 0.1)
 
         if self.opt.load_weights_folder is not None:
             self.load_model()
+            
 
         print("Training model named:\n  ", self.opt.model_name)
         print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
@@ -139,6 +145,7 @@ class Trainer:
         self.val_iter = iter(self.val_loader)
 
         self.writers = {}
+
         for mode in ["train", "val"]:
             self.writers[mode] = SummaryWriter(os.path.join(self.log_path, mode))
 
@@ -193,23 +200,26 @@ class Trainer:
     def run_epoch(self):
         """Run a single epoch of training and validation
         """
+        
         self.model_lr_scheduler.step()
 
         print("Training")
         self.set_train()
 
         for batch_idx, inputs in enumerate(self.train_loader):
-            
-            b_inputs = inputs[1]
-            inputs = inputs[0]
-            
+        
             before_op_time = time.time()
-
+           
+    
+           
+           #### Blur(student) Model 학습 #### 
             outputs, losses = self.process_batch(inputs)
-
             self.model_optimizer.zero_grad()
-            losses["loss"].backward()
+            final_loss = losses["loss"] + losses["reg_loss"] if losses["reg_loss"] is not None else losses["loss"]
+            final_loss.backward()
             self.model_optimizer.step()
+            
+           ##################################
 
             duration = time.time() - before_op_time
 
@@ -218,49 +228,79 @@ class Trainer:
             late_phase = self.step % 2000 == 0
 
             if early_phase or late_phase:
-                self.log_time(batch_idx, duration, losses["loss"].cpu().data)
+                if losses["reg_loss"] is not None:
+                    self.log_time(batch_idx, duration, losses["loss"].cpu().data, losses["reg_loss"].item())
+                else:
+                    self.log_time(batch_idx, duration, losses["loss"].cpu().data)
 
-                if "depth_gt" in inputs:
-                    self.compute_depth_losses(inputs, outputs, losses)
+                if "depth_gt" in inputs[0]:
+                    self.compute_depth_losses(inputs[0], outputs, losses)
 
-                self.log("train", inputs, outputs, losses)
+                self.log("train", inputs[0], outputs, losses)
                 self.val()
 
             self.step += 1
 
+    def process_batch_blur(self, temp, b_outputs, losses):
+        
+        regression_loss = self.regress_loss(temp, b_outputs)
+        losses["reg_loss"] = regression_loss
+        # losses["loss"] += regression_loss
+        
+        return losses 
+    
     def process_batch(self, inputs):
         """Pass a minibatch through the network and generate images and losses
         """
-        for key, ipt in inputs.items():
-            inputs[key] = ipt.to(self.device)
-
-        if self.opt.pose_model_type == "shared":
-            # If we are using a shared encoder for both depth and pose (as advocated
-            # in monodepthv1), then all images are fed separately through the depth encoder.
-            all_color_aug = torch.cat([inputs[("color_aug", i, 0)] for i in self.opt.frame_ids])
-            all_features = self.models["encoder"](all_color_aug)
-            all_features = [torch.split(f, self.opt.batch_size) for f in all_features]
-
-            features = {}
-            for i, k in enumerate(self.opt.frame_ids):
-                features[k] = [f[i] for f in all_features]
-
-            outputs = self.models["depth"](features[0])
+        if type(inputs) == list:
+            b_inputs = inputs[1]
+            s_inputs = inputs[0]    
+        
         else:
-            # Otherwise, we only feed the image with frame_id 0 through the depth encoder
-            features = self.models["encoder"](inputs["color_aug", 0, 0])
-            outputs = self.models["depth"](features)
+            b_inputs = inputs
+        
+        for key, ipt in b_inputs.items():
+                b_inputs[key] = ipt.to(self.device)
+   
+        # Otherwise, we only feed the image with frame_id 0 through the depth encoder
+        
+        b_features = self.models["encoder"](b_inputs["color_aug", 0, 0])
+        b_outputs = self.models["depth"](b_features)
 
         if self.opt.predictive_mask:
-            outputs["predictive_mask"] = self.models["predictive_mask"](features)
+                b_outputs["predictive_mask"] = self.models["predictive_mask"](b_features)
+                    
+        b_outputs.update(self.predict_poses(b_inputs, b_features))
 
-        if self.use_pose_net:
-            outputs.update(self.predict_poses(inputs, features))
 
-        self.generate_images_pred(inputs, outputs)
-        losses = self.compute_losses(inputs, outputs)
+        self.generate_images_pred(b_inputs, b_outputs)
+        losses = self.compute_losses(b_inputs, b_outputs)
+        
+        if type(inputs) == list:
+            for key, ipt in s_inputs.items():
+                s_inputs[key] = ipt.to(self.device)   
+            s_features = self.models["encoder"](s_inputs["color_aug", 0, 0])
+            s_outputs = self.models["depth"](s_features)
+            
+            if self.opt.predictive_mask:
+                s_outputs["predictive_mask"] = self.models["predictive_mask"](s_features)
+            
+            s_outputs.update(self.predict_poses(s_inputs, s_features))
+            
+            self.generate_images_pred(s_inputs, s_outputs)
+            s_losses = self.compute_losses(s_inputs, s_outputs)
+            
+            for key, value in s_losses.items():
+                losses[key] += value
 
-        return outputs, losses
+            temp = {}
+            for key, item in s_outputs.items():
+                temp[key] = s_outputs[key].detach()
+        
+            losses = self.process_batch_blur(temp, b_outputs, losses)
+            
+
+        return b_outputs, losses
 
     def predict_poses(self, inputs, features):
         """Predict poses between input frames for monocular sequences.
@@ -270,11 +310,9 @@ class Trainer:
             # In this setting, we compute the pose to each source frame via a
             # separate forward pass through the pose network.
 
-            # select what features the pose network takes as input
-            if self.opt.pose_model_type == "shared":
-                pose_feats = {f_i: features[f_i] for f_i in self.opt.frame_ids}
-            else:
-                pose_feats = {f_i: inputs["color_aug", f_i, 0] for f_i in self.opt.frame_ids}
+            
+            
+            pose_feats = {f_i: inputs["color_aug", f_i, 0] for f_i in self.opt.frame_ids}
 
             for f_i in self.opt.frame_ids[1:]:
                 if f_i != "s":
@@ -284,12 +322,12 @@ class Trainer:
                     else:
                         pose_inputs = [pose_feats[0], pose_feats[f_i]]
 
-                    if self.opt.pose_model_type == "separate_resnet":
-                        pose_inputs = [self.models["pose_encoder"](torch.cat(pose_inputs, 1))]
-                    elif self.opt.pose_model_type == "posecnn":
-                        pose_inputs = torch.cat(pose_inputs, 1)
-
+                    
+                        
+                    pose_inputs = [self.models["pose_encoder"](torch.cat(pose_inputs, 1))]
+                        
                     axisangle, translation = self.models["pose"](pose_inputs)
+                        
                     outputs[("axisangle", 0, f_i)] = axisangle
                     outputs[("translation", 0, f_i)] = translation
 
@@ -304,11 +342,14 @@ class Trainer:
                     [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids if i != "s"], 1)
 
                 if self.opt.pose_model_type == "separate_resnet":
+                    
+                 
                     pose_inputs = [self.models["pose_encoder"](pose_inputs)]
 
             elif self.opt.pose_model_type == "shared":
                 pose_inputs = [features[i] for i in self.opt.frame_ids if i != "s"]
-
+                
+            
             axisangle, translation = self.models["pose"](pose_inputs)
 
             for i, f_i in enumerate(self.opt.frame_ids[1:]):
@@ -323,21 +364,26 @@ class Trainer:
     def val(self):
         """Validate the model on a single minibatch
         """
+        
         self.set_eval()
         try:
             inputs = self.val_iter.next()
+            s_inputs, b_inputs = inputs[0], inputs[1]
         except StopIteration:
             self.val_iter = iter(self.val_loader)
             inputs = self.val_iter.next()
-
+            s_inputs, b_inputs = inputs[0], inputs[1]
+            
         with torch.no_grad():
-            outputs, losses = self.process_batch(inputs)
+            outputs, losses = self.process_batch(b_inputs)
 
-            if "depth_gt" in inputs:
-                self.compute_depth_losses(inputs, outputs, losses)
+            if "depth_gt" in s_inputs:
+                self.compute_depth_losses(s_inputs, outputs, losses)
 
-            self.log("val", inputs, outputs, losses)
-            del inputs, outputs, losses
+            self.log("val", s_inputs, outputs, losses)
+            
+    
+            del inputs, outputs, losses, b_inputs, s_inputs
 
         self.set_train()
 
@@ -392,6 +438,23 @@ class Trainer:
                 if not self.opt.disable_automasking:
                     outputs[("color_identity", frame_id, scale)] = \
                         inputs[("color", frame_id, source_scale)]
+    
+    # feature distillation                    
+    def feature_loss(self, s_outputs, b_outputs):
+        l1_loss = 0
+        for i in range(4, -1, -1):
+            l1_loss += F.l1_loss(b_outputs[("upconv", i, 1)], s_outputs[("upconv", i, 1)])
+            # abs_diff += torch.abs(s_outputs[("upconv", i, 1)]  - b_outputs[("upconv", i, 1)]).mean(1, True)
+            # l1_loss += abs_diff.mean()
+
+        return l1_loss
+    
+    def regress_loss(self, s_outputs, b_outputs):
+        feature_loss = self.feature_loss(s_outputs, b_outputs)
+        disp_loss = F.l1_loss(b_outputs["disp", 0], s_outputs["disp", 0])
+        loss = (feature_loss + disp_loss) * self.opt.feature_loss_coefficient
+        
+        return loss
 
     def compute_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
@@ -509,7 +572,7 @@ class Trainer:
             depth_pred, [375, 1242], mode="bilinear", align_corners=False), 1e-3, 80)
         depth_pred = depth_pred.detach()
 
-        depth_gt = inputs["depth_gt"]
+        depth_gt = inputs["depth_gt"].to(self.device)
         mask = depth_gt > 0
 
         # garg/eigen crop
@@ -528,16 +591,22 @@ class Trainer:
         for i, metric in enumerate(self.depth_metric_names):
             losses[metric] = np.array(depth_errors[i].cpu())
 
-    def log_time(self, batch_idx, duration, loss):
+    def log_time(self, batch_idx, duration, loss, reg_loss=None):
         """Print a logging statement to the terminal
         """
         samples_per_sec = self.opt.batch_size / duration
         time_sofar = time.time() - self.start_time
         training_time_left = (
             self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
-        print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
-            " | loss: {:.5f} | time elapsed: {} | time left: {}"
-        print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss,
+        if reg_loss is None:
+            print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
+                " | loss: {:.5f} | time elapsed: {} | time left: {}"
+            print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss, 
+                                sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
+        else:
+            print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
+                " | loss: {:.5f} | reg_loss: {:.5f} | time elapsed: {} | time left: {}"
+            print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss, reg_loss,
                                   sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
 
     def log(self, mode, inputs, outputs, losses):
@@ -601,9 +670,11 @@ class Trainer:
                 to_save['width'] = self.opt.width
                 to_save['use_stereo'] = self.opt.use_stereo
             torch.save(to_save, save_path)
-
+        
+        #blur model 파라미터 저장
         save_path = os.path.join(save_folder, "{}.pth".format("adam"))
         torch.save(self.model_optimizer.state_dict(), save_path)
+        
 
     def load_model(self):
         """Load model(s) from disk
@@ -629,5 +700,8 @@ class Trainer:
             print("Loading Adam weights")
             optimizer_dict = torch.load(optimizer_load_path)
             self.model_optimizer.load_state_dict(optimizer_dict)
+            self.model_optimizer.load_state_dict()
         else:
             print("Cannot find Adam weights so Adam is randomly initialized")
+            
+        
