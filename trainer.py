@@ -215,7 +215,8 @@ class Trainer:
            #### Blur(student) Model 학습 #### 
             outputs, losses = self.process_batch(inputs)
             self.model_optimizer.zero_grad()
-            losses["loss"].backward()
+            final_loss = losses["loss"] + losses["reg_loss"] if losses["reg_loss"] is not None else losses["loss"]
+            final_loss.backward()
             self.model_optimizer.step()
             
            ##################################
@@ -227,7 +228,10 @@ class Trainer:
             late_phase = self.step % 2000 == 0
 
             if early_phase or late_phase:
-                self.log_time(batch_idx, duration, losses["loss"].cpu().data)
+                if losses["reg_loss"] is not None:
+                    self.log_time(batch_idx, duration, losses["loss"].cpu().data, losses["reg_loss"].item())
+                else:
+                    self.log_time(batch_idx, duration, losses["loss"].cpu().data)
 
                 if "depth_gt" in inputs[0]:
                     self.compute_depth_losses(inputs[0], outputs, losses)
@@ -240,7 +244,8 @@ class Trainer:
     def process_batch_blur(self, temp, b_outputs, losses):
         
         regression_loss = self.regress_loss(temp, b_outputs)
-        losses["loss"] += regression_loss
+        losses["reg_loss"] = regression_loss
+        # losses["loss"] += regression_loss
         
         return losses 
     
@@ -256,23 +261,15 @@ class Trainer:
         
         for key, ipt in b_inputs.items():
                 b_inputs[key] = ipt.to(self.device)
-        
-      
-               
-        
+   
         # Otherwise, we only feed the image with frame_id 0 through the depth encoder
-      
+        
         b_features = self.models["encoder"](b_inputs["color_aug", 0, 0])
         b_outputs = self.models["depth"](b_features)
-        
-        
-        
 
         if self.opt.predictive_mask:
                 b_outputs["predictive_mask"] = self.models["predictive_mask"](b_features)
                     
-
-        
         b_outputs.update(self.predict_poses(b_inputs, b_features))
 
 
@@ -295,8 +292,7 @@ class Trainer:
             
             for key, value in s_losses.items():
                 losses[key] += value
-            
-            
+
             temp = {}
             for key, item in s_outputs.items():
                 temp[key] = s_outputs[key].detach()
@@ -447,22 +443,18 @@ class Trainer:
     def feature_loss(self, s_outputs, b_outputs):
         l1_loss = 0
         for i in range(4, -1, -1):
-            abs_diff = torch.abs(s_outputs[("upconv", i, 0)]  - b_outputs[("upconv", i, 0)]).mean(1, True)
-            abs_diff += torch.abs(s_outputs[("upconv", i, 1)]  - b_outputs[("upconv", i, 1)]).mean(1, True)
-            l1_loss += abs_diff.mean()
-        
-        
+            l1_loss += F.l1_loss(b_outputs[("upconv", i, 1)], s_outputs[("upconv", i, 1)])
+            # abs_diff += torch.abs(s_outputs[("upconv", i, 1)]  - b_outputs[("upconv", i, 1)]).mean(1, True)
+            # l1_loss += abs_diff.mean()
+
         return l1_loss
     
     def regress_loss(self, s_outputs, b_outputs):
+        feature_loss = self.feature_loss(s_outputs, b_outputs)
+        disp_loss = F.l1_loss(b_outputs["disp", 0], s_outputs["disp", 0])
+        loss = (feature_loss + disp_loss) * self.opt.feature_loss_coefficient
         
-        feature_loss = self.feature_loss(s_outputs, b_outputs) * self.opt.feature_loss_coefficient
-        
-        
-        rmse = (s_outputs["disp", 0] - b_outputs["disp", 0]) ** 2
-        rmse_loss = torch.sqrt(rmse.mean())
-        
-        return rmse_loss + feature_loss
+        return loss
 
     def compute_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
@@ -599,16 +591,22 @@ class Trainer:
         for i, metric in enumerate(self.depth_metric_names):
             losses[metric] = np.array(depth_errors[i].cpu())
 
-    def log_time(self, batch_idx, duration, loss):
+    def log_time(self, batch_idx, duration, loss, reg_loss=None):
         """Print a logging statement to the terminal
         """
         samples_per_sec = self.opt.batch_size / duration
         time_sofar = time.time() - self.start_time
         training_time_left = (
             self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
-        print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
-            " | loss: {:.5f} | time elapsed: {} | time left: {}"
-        print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss,
+        if reg_loss is None:
+            print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
+                " | loss: {:.5f} | time elapsed: {} | time left: {}"
+            print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss, 
+                                sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
+        else:
+            print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
+                " | loss: {:.5f} | reg_loss: {:.5f} | time elapsed: {} | time left: {}"
+            print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss, reg_loss,
                                   sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
 
     def log(self, mode, inputs, outputs, losses):
