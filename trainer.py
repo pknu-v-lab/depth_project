@@ -306,7 +306,7 @@ class Trainer:
 
         return b_outputs, losses
 
-    def predict_poses(self, inputs, features, type):
+    def predict_poses(self, inputs, features):
         """Predict poses between input frames for monocular sequences.
         """
         outputs = {}
