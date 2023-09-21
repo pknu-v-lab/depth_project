@@ -224,6 +224,7 @@ class MonoDataset(data.Dataset):
             b_inputs["stereo_T"] = torch.from_numpy(stereo_T)
 
         return inputs, b_inputs
+        # return inputs
 
     def get_color(self, folder, frame_index, side, do_flip):
         raise NotImplementedError

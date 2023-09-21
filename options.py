@@ -84,7 +84,7 @@ class MonodepthOptions:
                                  default=[0, -1, 1])
         self.parser.add_argument('--feature_loss_coefficient', 
                                  type=float,
-                                 default=0.03) 
+                                 default=0.0003) 
         
 
         # OPTIMIZATION options

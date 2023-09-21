@@ -1,7 +1,6 @@
 from __future__ import absolute_import, division, print_function
 
 import os
-os.environ['KMP_DUPLICATE_LIB_OK']='True'
 import cv2
 import numpy as np
 
@@ -164,7 +163,7 @@ def evaluate(opt):
         quit()
 
     gt_path = os.path.join(splits_dir, opt.eval_split, "gt_depths.npz")
-    gt_depths = np.load(gt_path, fix_imports=True, encoding='latin1')["data"]
+    gt_depths = np.load(gt_path, fix_imports=True, encoding='latin1', allow_pickle=True)["data"]
 
     print("-> Evaluating")
 
