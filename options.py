@@ -84,14 +84,14 @@ class MonodepthOptions:
                                  default=[0, -1, 1])
         self.parser.add_argument('--feature_loss_coefficient', 
                                  type=float,
-                                 default=0.0003) 
+                                 default=0.0002) 
         
 
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=8)
+                                 default=12)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",

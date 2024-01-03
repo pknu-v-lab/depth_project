@@ -259,42 +259,44 @@ class Trainer:
         if type(inputs) == list:
             b_inputs = inputs[1]
             s_inputs = inputs[0]    
+            
+            for key, ipt in s_inputs.items():
+                b_inputs[key] = ipt.to(self.device)   
         
+            b_features = self.models["encoder"](b_inputs["color_aug", 0, 0])
+            b_outputs = self.models["depth"](b_features)
+            
         else:
-            b_inputs = inputs
+            s_inputs = inputs
         
-        for key, ipt in b_inputs.items():
-                b_inputs[key] = ipt.to(self.device)
+        for key, ipt in s_inputs.items():
+                s_inputs[key] = ipt.to(self.device)
    
         # Otherwise, we only feed the image with frame_id 0 through the depth encoder
         
-        b_features = self.models["encoder"](b_inputs["color_aug", 0, 0])
-        b_outputs = self.models["depth"](b_features)
+        s_features = self.models["encoder"](s_inputs["color_aug", 0, 0])
+        s_outputs = self.models["depth"](s_features)
 
         if self.opt.predictive_mask:
-                b_outputs["predictive_mask"] = self.models["predictive_mask"](b_features)
+                s_outputs["predictive_mask"] = self.models["predictive_mask"](s_features)
                     
-        b_outputs.update(self.predict_poses(b_inputs, b_features))
+        s_outputs.update(self.predict_poses(s_inputs, s_features))
 
 
-        self.generate_images_pred(b_inputs, b_outputs)
-        losses = self.compute_losses(b_inputs, b_outputs)
+        self.generate_images_pred(s_inputs, s_outputs)
+        losses = self.compute_losses(s_inputs, s_outputs)
         
         if type(inputs) == list:
-            for key, ipt in s_inputs.items():
-                s_inputs[key] = ipt.to(self.device)   
-            s_features = self.models["encoder"](s_inputs["color_aug", 0, 0])
-            s_outputs = self.models["depth"](s_features)
             
             if self.opt.predictive_mask:
-                s_outputs["predictive_mask"] = self.models["predictive_mask"](s_features)
+                b_outputs["predictive_mask"] = self.models["predictive_mask"](s_features)
             
-            s_outputs.update(self.predict_poses(s_inputs, s_features))
+            b_outputs.update(self.predict_poses(s_inputs, s_features))
             
-            self.generate_images_pred(s_inputs, s_outputs)
-            s_losses = self.compute_losses(s_inputs, s_outputs)
+            self.generate_images_pred(s_inputs, b_outputs)
+            b_losses = self.compute_losses(s_inputs, b_outputs)
             
-            for key, value in s_losses.items():
+            for key, value in b_losses.items():
                 losses[key] += value
 
             temp = {}
@@ -303,9 +305,10 @@ class Trainer:
         
             losses = self.process_batch_blur(temp, b_outputs, losses)
             
+            return b_outputs, losses
 
-        return b_outputs, losses
-
+        return s_outputs, losses 
+    
     def predict_poses(self, inputs, features):
         """Predict poses between input frames for monocular sequences.
         """

@@ -6,4 +6,6 @@ __pycache__
 kitti_data
 models
 tmp
-dpt_networks
+*.pth
+*.jpg
+*.jpeg
