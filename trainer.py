@@ -245,9 +245,9 @@ class Trainer:
 
             self.step += 1
 
-    def process_batch_blur(self, temp, b_outputs, losses):
+    def process_batch_blur(self, temp, b_outputs, losses, mask):
         
-        regression_loss = self.regress_loss(temp, b_outputs)
+        regression_loss = self.regress_loss(temp, b_outputs, mask)
         losses["reg_loss"] = regression_loss
         # losses["loss"] += regression_loss
         
@@ -259,8 +259,11 @@ class Trainer:
         if type(inputs) == list:
             b_inputs = inputs[1]
             s_inputs = inputs[0]    
+            
             for key, ipt in s_inputs.items():
                 s_inputs[key] = ipt.to(self.device)   
+            s_features = self.models["encoder"](s_inputs["color_aug", 0, 0])
+        
         else:
             b_inputs = inputs
         
@@ -271,17 +274,16 @@ class Trainer:
         
         b_features = self.models["encoder"](b_inputs["color_aug", 0, 0])
         b_outputs = self.models["depth"](b_features)
+        
         if self.opt.predictive_mask:
                 b_outputs["predictive_mask"] = self.models["predictive_mask"](b_features)
-                    
-        
         
         if type(inputs) == list:
-            b_outputs.update(self.predict_poses(s_inputs, b_features))
+            b_outputs.update(self.predict_poses(s_inputs, s_features))
             self.generate_images_pred(s_inputs, b_outputs)
             losses = self.compute_losses(s_inputs, b_outputs)
             
-            s_features = self.models["encoder"](s_inputs["color_aug", 0, 0])
+            
             s_outputs = self.models["depth"](s_features)
             
             if self.opt.predictive_mask:
@@ -297,8 +299,9 @@ class Trainer:
             temp = {}
             for key, item in s_outputs.items():
                 temp[key] = s_outputs[key].detach()
-        
-            losses = self.process_batch_blur(temp, b_outputs, losses)
+
+            mask = self.compute_mask(s_inputs, s_outputs, b_outputs)
+            losses = self.process_batch_blur(temp, b_outputs, losses, mask)
         
         else:
             b_outputs.update(self.predict_poses(b_inputs, b_features))
@@ -455,9 +458,9 @@ class Trainer:
 
         return l1_loss
     
-    def regress_loss(self, s_outputs, b_outputs):
+    def regress_loss(self, s_outputs, b_outputs, mask):
         feature_loss = self.feature_loss(s_outputs, b_outputs)
-        disp_loss = F.l1_loss(b_outputs["disp", 0], s_outputs["disp", 0])
+        disp_loss = F.l1_loss(b_outputs["disp", 0], s_outputs["disp", 0]) * mask
         loss = (feature_loss + disp_loss) * self.opt.feature_loss_coefficient
         
         return loss
@@ -566,6 +569,41 @@ class Trainer:
         total_loss /= self.num_scales
         losses["loss"] = total_loss
         return losses
+    
+    def compute_mask(self, s_inputs, s_outputs, b_outputs):
+    
+        
+        for scale in self.opt.scales:
+          
+            s_reprojection_losses = []
+            b_reprojection_losses = []
+
+            if self.opt.v1_multiscale:
+                source_scale = scale
+            else:
+                source_scale = 0
+                
+            mask = 0
+            
+            target = s_inputs[("color" , 0 , source_scale)]
+            
+            for frame_id in self.opt.frame_ids[1:]:
+                s_pred = s_outputs[("color" , frame_id, scale)]
+                b_pred = b_outputs[("color" , frame_id, scale)]    
+                s_reprojection_losses.append(self.compute_reprojection_loss(s_pred, target))
+                b_reprojection_losses.append(self.compute_reprojection_loss(b_pred, target))
+            
+            s_reprojection_losses = torch.cat(s_reprojection_losses, 1)
+            b_reprojection_losses = torch.cat(b_reprojection_losses, 1)  
+
+        if s_reprojection_losses.mean() < b_reprojection_losses.mean():        
+            mask = 1
+        
+        else:
+            mask = 0
+            
+        
+        return mask
 
     def compute_depth_losses(self, inputs, outputs, losses):
         """Compute depth metrics, to allow monitoring during training
